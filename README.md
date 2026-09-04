@@ -1,129 +1,230 @@
-# Case study — Junior Software Engineer at mangolab
+# MangoLab FX Tool
 
-Two small tasks, **about two and a half hours in total.** Please do not spend
-your weekend on this. If you run out of time, stop and write down what you would
-have done next — that answer counts too.
+A small FastAPI service that converts currencies using exchange rates from the Frankfurter API.
 
-Use Claude Code, Cursor, Copilot — whatever you normally use. That is how we work
-every day, and we would rather see you use it well than watch you avoid it. The
-only thing we ask is that you know your own code.
+## Requirements
 
-**Start by clicking "Use this template"** to create your own repository, then
-work there.
+* Python 3.10+
+* FastAPI
+* Uvicorn
+* pytest
+* httpx
 
----
+## Run
 
-## Part A — build (about 90 minutes)
+Create and activate a virtual environment, then install the dependencies:
 
-A small HTTP service — Python + FastAPI preferred, TypeScript is fine — with one
-endpoint an AI agent could call as a tool:
-
-```
-GET /tools/convert?amount=250&from=EUR&to=TRY&date=2026-08-28
+```bash
+pip install -r requirements.txt
 ```
 
-It answers using the public [Frankfurter API](https://frankfurter.dev) —
-European Central Bank rates, no API key, no signup.
+Start the service:
 
-### Three things are fixed, so that we can run every submission the same way
+```bash
+./run.sh
+```
 
-| | |
-|---|---|
-| Upstream URL | from the `FX_UPSTREAM_BASE` environment variable, defaulting to `https://api.frankfurter.dev`. **Nothing may hardcode the real host** — we point this at a fake upstream when reviewing. |
-| Port | from the `PORT` environment variable, default `8080` |
-| Scripts | `./run.sh` starts the service, `./test.sh` runs the tests. Both are in this template, unimplemented. |
+The service listens on port `8080` by default.
 
-### The response
+A different port can be provided with:
 
-On success, 200 with:
+```bash
+PORT=9000 ./run.sh
+```
+
+The upstream API can be configured with:
+
+```bash
+FX_UPSTREAM_BASE=http://localhost:9001 ./run.sh
+```
+
+The default upstream is:
+
+```text
+https://api.frankfurter.dev
+```
+
+The application does not hardcode the upstream host outside configuration.
+
+## API
+
+### Convert currency
+
+```http
+GET /tools/convert
+```
+
+Example:
+
+```text
+/tools/convert?amount=250&from=EUR&to=TRY&date=2026-08-28
+```
+
+Example response:
 
 ```json
 {
-  "amount": 250,
+  "amount": "250",
   "from": "EUR",
   "to": "TRY",
-  "rate": 47.1234,
-  "result": 11780.85,
+  "rate": "56.1718",
+  "result": "14042.9500",
   "rate_date": "2026-08-28",
   "asked_date": "2026-08-28",
-  "source": "ECB via frankfurter.dev"
+  "source": "frankfurter"
 }
 ```
 
-`rate_date` is **the date the rate you used actually belongs to.** `asked_date`
-is what the caller asked for. They are not always the same, and that difference
-is the point of this task.
+`rate_date` is the actual date of the rate returned by the upstream service.
 
-On failure, a non-2xx status and:
+`asked_date` is the date requested by the caller.
+
+These dates may differ. The service never changes the upstream rate date to make it appear as though the rate belongs to the requested date.
+
+## Behaviour
+
+### Weekends and holidays
+
+The ECB does not publish rates for every calendar day.
+
+If Frankfurter cannot provide a rate for the requested date, the service returns `RATE_NOT_FOUND` rather than silently using a rate from another day.
+
+This avoids presenting an older rate as though it belonged to the requested date.
+
+If an upstream response explicitly contains an earlier published rate, its actual date is returned in `rate_date`, while the requested date remains in `asked_date`.
+
+### Future dates
+
+Future dates that do not have a published rate return:
 
 ```json
-{ "error": "<short_machine_code>", "message": "<a sentence a person could read>" }
+{
+  "error": "RATE_NOT_FOUND",
+  "message": "Exchange rate could not be found for the requested date."
+}
 ```
 
-List your error codes in your README.
+### Dates before the series starts
 
-### The part that matters
+Dates for which the upstream has no available rate return `RATE_NOT_FOUND`.
 
-The caller is a language model talking to a paying customer, so **a wrong number
-is worse than no number.** Decide — and implement — what happens when:
+### Currency codes
 
-- the ECB published no rate for the date asked (weekends, holidays);
-- the date is in the future, or before the series starts;
-- the currency code does not exist, or `from` and `to` are the same;
-- the upstream is slow, returns 500, or returns something that is not JSON;
-- `amount` is missing, zero, negative, or has ten decimal places.
+Currency codes are normalized to uppercase.
 
-Your endpoint must never invent a rate, and must never present a rate as
-belonging to a date it does not belong to. Note that the upstream itself tells
-you which date its rates are from — read it. If you choose to answer with an
-earlier published rate, the response has to make that visible, because the model
-has to be able to tell the customer which day the number is from.
+Invalid currency formats return:
 
-### Also required
+```text
+INVALID_CURRENCY
+```
 
-- **Tests that pass with no network at all** — fake the upstream. We run
-  `./test.sh` with `FX_UPSTREAM_BASE` pointing at a closed port.
-- A README of your own we can follow in under a minute: how to run it, how to
-  run the tests, your error codes, and what your endpoint does in each of the
-  cases above.
-- A repeat of the same question should not re-ask the upstream.
-- `NOTES.md`, one page. The skeleton is in this repo.
+The service expects three-letter alphabetic currency codes.
 
-### Not required, not scored
+### Same currency
 
-Auth, a database, a UI, a Dockerfile, CI, deployment, more endpoints. Adding them
-will not help you; a smaller thing done carefully will.
+A conversion such as EUR → EUR does not require an upstream request.
 
----
+The rate is `1` and the result equals the original amount.
 
-## Part B — review (about 45 minutes)
+The response source is:
 
-`tool.py` in this repository is a working version of the same service, written
-quickly with an AI assistant. It runs. **Review it as if it were going live
-tomorrow for a customer who pays us.**
+```text
+same_currency
+```
 
-Fill in `REVIEW.md`, one page:
+### Amount validation
 
-- what is wrong, and what it does to a **customer** — not to a linter;
-- how you would verify each finding;
-- your findings **ranked**, and which single one you would fix before shipping
-  tonight.
+The following amounts are rejected:
 
-Fewer findings, ranked and explained, beat a long list. If something looks
-suspicious but is actually fine, saying so is worth as much as finding a real
-defect.
+* zero
+* negative values
+* values with more than 10 decimal places
 
----
+An amount with exactly 10 decimal places is accepted.
 
-## Submitting
+Invalid amounts return:
 
-Reply to our email with a link to your repository. Commit in small steps — the
-history is part of what we read. Five days is plenty; if you need more, just say
-so.
+```text
+INVALID_AMOUNT
+```
 
-Any question about this brief, ask. An unclear requirement is our fault, not a
-test.
+### Upstream failures
 
----
+The service does not invent or estimate exchange rates.
 
-<sub>mangolab — Mango Yazılım Teknolojileri Ltd. Şti. · [mangolab.ai/careers](https://mangolab.ai/careers)</sub>
+| Situation                           | Error code                  | HTTP status |
+| ----------------------------------- | --------------------------- | ----------: |
+| Invalid amount                      | `INVALID_AMOUNT`            |         400 |
+| Invalid currency                    | `INVALID_CURRENCY`          |         400 |
+| Rate unavailable for requested date | `RATE_NOT_FOUND`            |         404 |
+| Upstream timeout                    | `UPSTREAM_TIMEOUT`          |         504 |
+| Upstream request failure            | `UPSTREAM_UNAVAILABLE`      |         502 |
+| Upstream HTTP error                 | `UPSTREAM_ERROR`            |         502 |
+| Invalid upstream response           | `INVALID_UPSTREAM_RESPONSE` |         502 |
+
+All application errors use the following structure:
+
+```json
+{
+  "error": "<machine_code>",
+  "message": "<human-readable message>"
+}
+```
+
+### Repeated requests
+
+Rates are cached using the currency pair and requested date as the cache key.
+
+A repeated request for the same pair and date uses the cached rate instead of requesting the upstream service again.
+
+The cache has a 300-second TTL.
+
+## Tests
+
+Run the test suite with:
+
+```bash
+./test.sh
+```
+
+The tests do not require network access.
+
+The upstream HTTP layer is mocked using `httpx.MockTransport`, so tests remain deterministic and do not depend on the real Frankfurter API.
+
+The test suite can also be run while pointing `FX_UPSTREAM_BASE` at a closed port:
+
+```bash
+FX_UPSTREAM_BASE=http://127.0.0.1:59999 ./test.sh
+```
+
+The tests should still pass because they do not make real upstream requests.
+
+Current test suite:
+
+```text
+23 passed
+```
+
+## Project structure
+
+```text
+mangolab-fx-tool/
+├── app/
+│   ├── main.py
+│   ├── config.py
+│   ├── schemas.py
+│   ├── errors.py
+│   ├── cache.py
+│   └── services/
+│       └── fx_service.py
+├── tests/
+│   ├── conftest.py
+│   ├── test_convert.py
+│   └── test_api.py
+├── run.sh
+├── test.sh
+├── requirements.txt
+├── README.md
+├── NOTES.md
+└── REVIEW.md
+```
